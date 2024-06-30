@@ -55,10 +55,16 @@ def scrape_text(url: str):
     print(e)
     return None
 
-#chain that takes one question and one url to generate text
+#chain that takes one question and one url to generate text, added RunnablePassThrough second time to include references at the end
+#scrape_and_summarize_chain = RunnablePassthrough.assign(
+#    text = lambda x: scrape_text(x["url"])[:10000]
+#) | SUMMARY_PROMPT | ChatOpenAI(model='gpt-3.5-turbo-0125', temperature=0, openai_api_key = os.environ['OPEN_API_KEY'] ) | StrOutputParser()
+
 scrape_and_summarize_chain = RunnablePassthrough.assign(
-    text = lambda x: scrape_text(x["url"])[:10000]
-) | SUMMARY_PROMPT | ChatOpenAI(model='gpt-3.5-turbo-0125', temperature=0, openai_api_key = os.environ['OPEN_API_KEY'] ) | StrOutputParser()
+    summary = RunnablePassthrough.assign(
+        text = lambda x: scrape_text(x["url"])[:10000]
+    ) | SUMMARY_PROMPT | ChatOpenAI(model='gpt-3.5-turbo-0125', temperature=0, openai_api_key = os.environ['OPEN_API_KEY'] ) | StrOutputParser()
+) | (lambda x: f"URL: {x['url']}\n\nSummary: {x['summary']}")
 
 
 #chain that takes one question and parsing multiple urls

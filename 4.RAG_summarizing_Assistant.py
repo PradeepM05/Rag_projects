@@ -1,83 +1,98 @@
-#pip install langchain langchain_community openai duckduckgo-search beautifulsoup4 langchain_openai  FastAPI sse_starlette uvicorn
-
+from langchain.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from langchain.schema.output_parser import StrOutputParser
-from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from bs4 import BeautifulSoup
 import requests
+from bs4 import BeautifulSoup
+from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
 from langchain.utilities import DuckDuckGoSearchAPIWrapper
 import json
 
-import os
-os.environ['LANGCHAIN_TRACING_V2'] = 'true'
-os.environ['LANGCHAIN_ENDPOINT']  = 'https://api.smith.langchain.com'
-os.environ['LANGCHAIN_API_KEY']='lsv2_pt_xxxxxxxx'
-os.environ['OPEN_API_KEY']='sk-xxxxxxxxxxxx'
+RESULTS_PER_QUESTION = 3
 
-RESULTS_PER_QUESTION=3
+ddg_search = DuckDuckGoSearchAPIWrapper()
 
-#Function to retrieve top n results from duckduckgo search
-def web_search(query: str, num_results: int=RESULTS_PER_QUESTION):
-    ddg_search = DuckDuckGoSearchAPIWrapper()
+
+def web_search(query: str, num_results: int = RESULTS_PER_QUESTION):
     results = ddg_search.results(query, num_results)
     return [r["link"] for r in results]
 
 
-summary_template = """ {text}
-using the above text, answer the following question:
-Question: {question}
-if the question cannot be answered using the text, imply summarize the text. include all factual information, numbers, stats etc.
-"""
+SUMMARY_TEMPLATE = """{text} 
+-----------
+Using the above text, answer in short the following question: 
+> {question}
+-----------
+if the question cannot be answered using the text, imply summarize the text. Include all factual information, numbers, stats etc if available."""  # noqa: E501
+SUMMARY_PROMPT = ChatPromptTemplate.from_template(SUMMARY_TEMPLATE)
 
-SUMMARY_PROMPT = ChatPromptTemplate.from_template(summary_template)
 
-#Function to GET data from Web pages
 def scrape_text(url: str):
-  #send a GET request to webpage
+    # Send a GET request to the webpage
+    try:
+        response = requests.get(url)
 
-  try:
-    response = requests.get(url)
+        # Check if the request was successful
+        if response.status_code == 200:
+            # Parse the content of the request with BeautifulSoup
+            soup = BeautifulSoup(response.text, "html.parser")
 
-    #Check if request was successful
-    if response.status_code == 200:
-      #parse the HTML content with BeatifulSoup
-      soup = BeautifulSoup(response.text, 'html.parser')
+            # Extract all text from the webpage
+            page_text = soup.get_text(separator=" ", strip=True)
 
-      #Extract all the text from the webpage
-      page_text = soup.get_text(separator=" ", strip=True)
+            # Print the extracted text
+            return page_text
+        else:
+            return f"Failed to retrieve the webpage: Status code {response.status_code}"
+    except Exception as e:
+        print(e)
+        return f"Failed to retrieve the webpage: {e}"
 
-      return page_text
-    else:
-      return f"Failed to retrieve web page: Status code {response.status_code}"
 
-  except Exception as e:
-    print(e)
-    return None
-
-#chain that takes one question and one url to generate text, added RunnablePassThrough second time to include references at the end
-#scrape_and_summarize_chain = RunnablePassthrough.assign(
-#    text = lambda x: scrape_text(x["url"])[:10000]
-#) | SUMMARY_PROMPT | ChatOpenAI(model='gpt-3.5-turbo-0125', temperature=0, openai_api_key = os.environ['OPEN_API_KEY'] ) | StrOutputParser()
+url = "https://blog.langchain.dev/announcing-langsmith/"
 
 scrape_and_summarize_chain = RunnablePassthrough.assign(
     summary = RunnablePassthrough.assign(
-        text = lambda x: scrape_text(x["url"])[:10000]
-    ) | SUMMARY_PROMPT | ChatOpenAI(model='gpt-3.5-turbo-0125', temperature=0, openai_api_key = os.environ['OPEN_API_KEY'] ) | StrOutputParser()
-) | (lambda x: f"URL: {x['url']}\n\nSummary: {x['summary']}")
+    text=lambda x: scrape_text(x["url"])[:10000]
+) | SUMMARY_PROMPT | ChatOpenAI(model="gpt-3.5-turbo-1106") | StrOutputParser()
+) | (lambda x: f"URL: {x['url']}\n\nSUMMARY: {x['summary']}")
 
-
-#chain that takes one question and parsing multiple urls
 web_search_chain = RunnablePassthrough.assign(
-    urls = lambda x : web_search(x["question"])
-) | (lambda x: [{"question":x["question"], "url":u}  for u in x["urls"]]) | scrape_and_summarize_chain.map()
+    urls = lambda x: web_search(x["question"])
+) | (lambda x: [{"question": x["question"], "url": u} for u in x["urls"]]) | scrape_and_summarize_chain.map()
+
+## This is for Arxiv
+
+# from langchain.retrievers import ArxivRetriever
+# 
+# retriever = ArxivRetriever()
+# SUMMARY_TEMPLATE = """{doc} 
+# 
+# -----------
+# 
+# Using the above text, answer in short the following question: 
+# 
+# > {question}
+# 
+# -----------
+# if the question cannot be answered using the text, imply summarize the text. Include all factual information, numbers, stats etc if available."""  # noqa: E501
+# SUMMARY_PROMPT = ChatPromptTemplate.from_template(SUMMARY_TEMPLATE)
+# 
+# 
+# scrape_and_summarize_chain = RunnablePassthrough.assign(
+#     summary =  SUMMARY_PROMPT | ChatOpenAI(model="gpt-3.5-turbo-1106") | StrOutputParser()
+# ) | (lambda x: f"Title: {x['doc'].metadata['Title']}\n\nSUMMARY: {x['summary']}")
+# 
+# web_search_chain = RunnablePassthrough.assign(
+#     docs = lambda x: retriever.get_summaries_as_docs(x["question"])
+# )| (lambda x: [{"question": x["question"], "doc": u} for u in x["docs"]]) | scrape_and_summarize_chain.map()
+
 
 
 SEARCH_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
             "user",
-            "write 3 google search queries to search online that form an"
+            "Write 3 google search queries to search online that form an "
             "objective opinion from the following: {question}\n"
             "You must respond with a list of strings in the following format: "
             '["query 1", "query 2", "query 3"].',
@@ -85,12 +100,12 @@ SEARCH_PROMPT = ChatPromptTemplate.from_messages(
     ]
 )
 
-#Chain that pulls three relavent question to given question
-search_question_chain = SEARCH_PROMPT | ChatOpenAI(model='gpt-3.5-turbo-0125', openai_api_key = os.environ['OPEN_API_KEY'] ) | StrOutputParser() | json.loads
-full_research_chain = search_question_chain | (lambda x : [{"question":q} for q in x]) | web_search_chain.map()
+search_question_chain = SEARCH_PROMPT | ChatOpenAI(temperature=0) | StrOutputParser() | json.loads
 
-#Creating prompt to summarize all the oupts and generate a Thesis 
+full_research_chain = search_question_chain | (lambda x: [{"question": q} for q in x]) | web_search_chain.map()
+
 WRITER_SYSTEM_PROMPT = "You are an AI critical thinker research assistant. Your sole purpose is to write well written, critically acclaimed, objective and structured reports on given text."  # noqa: E501
+
 
 # Report prompts from https://github.com/assafelovic/gpt-researcher/blob/master/gpt_researcher/master/prompts.py
 RESEARCH_REPORT_TEMPLATE = """Information:
@@ -107,46 +122,32 @@ Write all used source urls at the end of the report, and make sure to not add du
 You must write the report in apa format.
 Please do your best, this is very important to my career."""  # noqa: E501
 
-
 prompt = ChatPromptTemplate.from_messages(
     [
-    ("system", WRITER_SYSTEM_PROMPT),
-    ("user", REASEARCH_REPORT_TEMPLATE),
+        ("system", WRITER_SYSTEM_PROMPT),
+        ("user", RESEARCH_REPORT_TEMPLATE),
     ]
 )
 
-#Function to join the outputs which are within list of lists
-def collapse_list_of_list(listoflists):
-  content = []
-  for l in listoflists:
-    content.append("\n\n".join(l))
-  return "\n\n".join(content)
+def collapse_list_of_lists(list_of_lists):
+    content = []
+    for l in list_of_lists:
+        content.append("\n\n".join(l))
+    return "\n\n".join(content)
 
-#Final Chain to summarize the web search results and combine and generate a report as per research template
 chain = RunnablePassthrough.assign(
-    research_summary = full_research_chain | collapse_list_of_list 
-) | prompt | ChatOpenAI(model='gpt-3.5-turbo-0125', temperature=0, openai_api_key = os.environ['OPEN_API_KEY'] ) | StrOutputParser()  
-
-
-
-# Define the input data
-input_data = {
-    "question": "What is the difference between langsmith and langchain?"
-}
-
-# Pass the required input argument
-chain.invoke(input_data)
-
-
+    research_summary= full_research_chain | collapse_list_of_lists
+) | prompt | ChatOpenAI(model="gpt-3.5-turbo-1106") | StrOutputParser()
 
 #!/usr/bin/env python
 from fastapi import FastAPI
 from langserve import add_routes
 
+
 app = FastAPI(
-    title="LangChain Server",
-    version="1.0",
-    description="A simple api server using Langchain's Runnable interfaces",
+  title="LangChain Server",
+  version="1.0",
+  description="A simple api server using Langchain's Runnable interfaces",
 )
 
 add_routes(

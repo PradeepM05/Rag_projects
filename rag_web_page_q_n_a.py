@@ -17,8 +17,8 @@ os.environ['OPEN_API_KEY']='sk-xxxxxxxxxxxx'
 
 template = """ summarize the following question based on context:
 
-Question: {question}
 Context: {context}
+Question: {question}
 """
 
 prompt = ChatPromptTemplate.from_template(template)

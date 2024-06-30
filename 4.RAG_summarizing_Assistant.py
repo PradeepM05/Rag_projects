@@ -1,4 +1,4 @@
-#pip install langchain langchain_community openai duckduckgo-search beautifulsoup4 langchain_openai 
+#pip install langchain langchain_community openai duckduckgo-search beautifulsoup4 langchain_openai  FastAPI sse_starlette uvicorn
 
 from langchain.prompts import ChatPromptTemplate
 from langchain.schema.output_parser import StrOutputParser
@@ -136,3 +136,27 @@ input_data = {
 
 # Pass the required input argument
 chain.invoke(input_data)
+
+
+
+#!/usr/bin/env python
+from fastapi import FastAPI
+from langserve import add_routes
+
+app = FastAPI(
+    title="LangChain Server",
+    version="1.0",
+    description="A simple api server using Langchain's Runnable interfaces",
+)
+
+add_routes(
+    app,
+    chain,
+    path="/research-assistant",
+)
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="localhost", port=8000)

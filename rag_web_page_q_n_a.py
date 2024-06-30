@@ -23,7 +23,7 @@ Question: {question}
 
 prompt = ChatPromptTemplate.from_template(template)
 
-
+# function to read from url page
 def scrape_text(url: str):
   #send a GET request to webpage
 

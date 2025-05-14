@@ -1,62 +1,86 @@
 import pandas as pd
 import numpy as np
+from collections import defaultdict
+import heapq
 
-# Function to process companies in chunks
-def find_correlated_companies(df, chunk_size=1000, threshold=0.7):
-    # Get all unique companies
-    all_companies = df['insm_issr_bb_co_id'].unique()
-    n_companies = len(all_companies)
+def find_top_correlated_companies_optimized(df, top_n=20, min_days=5):
+    """
+    Most memory-efficient approach for finding correlations
     
-    # Create a mapping of company IDs to names for quick lookup
-    company_names = dict(zip(df['insm_issr_bb_co_id'], df['insm_issr_bb_co_nm']))
+    This approach:
+    1. Groups data by company
+    2. Calculates correlations on-the-fly
+    3. Only keeps track of top_n correlations
+    """
+    # Process dataframe to create a dictionary of company data by date
+    company_data = defaultdict(dict)
     
-    # List to store results
-    correlated_pairs = []
+    for _, row in df.iterrows():
+        company = row['insm_issr_bb_co_nm']
+        date = row['cob_dt']
+        zscore = row['sgl_dy_pxchg_scr']
+        company_data[company][date] = zscore
     
-    # Process in chunks
-    for i in range(0, n_companies, chunk_size):
-        # Get current chunk of companies
-        chunk_companies = all_companies[i:i+chunk_size]
-        print(f"Processing companies {i} to {min(i+chunk_size, n_companies)} of {n_companies}")
+    # Get list of companies
+    companies = list(company_data.keys())
+    print(f"Processing {len(companies)} companies")
+    
+    # Initialize heap for top correlations
+    min_heap = []  # will store (correlation, company1, company2)
+    
+    # Function to calculate Pearson correlation
+    def calc_correlation(x, y):
+        n = len(x)
+        sum_x = sum(x)
+        sum_y = sum(y)
+        sum_xy = sum(x_i * y_i for x_i, y_i in zip(x, y))
+        sum_x2 = sum(x_i**2 for x_i in x)
+        sum_y2 = sum(y_i**2 for y_i in y)
         
-        # Filter data for these companies
-        chunk_df = df[df['insm_issr_bb_co_id'].isin(chunk_companies)]
+        numerator = n * sum_xy - sum_x * sum_y
+        denominator = np.sqrt((n * sum_x2 - sum_x**2) * (n * sum_y2 - sum_y**2))
         
-        # Pivot data
-        pivoted = chunk_df.pivot(index='cob_dt', 
-                                columns='insm_issr_bb_co_id', 
-                                values='sgl_dy_pxchg_scr')
+        if denominator == 0:
+            return 0
+        return numerator / denominator
+    
+    # Process all pairs
+    pairs_processed = 0
+    total_pairs = len(companies) * (len(companies) - 1) // 2
+    
+    for i, company1 in enumerate(companies):
+        if i % 100 == 0 and i > 0:
+            print(f"Processed {i}/{len(companies)} companies, {pairs_processed}/{total_pairs} pairs")
         
-        # Calculate correlation with ALL companies
-        # This is the memory-intensive part but more manageable with chunks
-        corr = pivoted.corrwith(df.pivot(index='cob_dt', 
-                                        columns='insm_issr_bb_co_id', 
-                                        values='sgl_dy_pxchg_scr'))
+        data1 = company_data[company1]
+        dates1 = set(data1.keys())
         
-        # Find high correlations
-        for company in chunk_companies:
-            high_corrs = corr[abs(corr) > threshold]
-            high_corrs = high_corrs[high_corrs.index != company]  # Remove self-correlation
+        for j in range(i+1, len(companies)):
+            company2 = companies[j]
+            data2 = company_data[company2]
+            dates2 = set(data2.keys())
             
-            # Add to results
-            for other_company, corr_value in high_corrs.items():
-                if company < other_company:  # Avoid duplicates
-                    correlated_pairs.append((
-                        company, 
-                        other_company,
-                        company_names.get(company, "Unknown"),
-                        company_names.get(other_company, "Unknown"),
-                        corr_value
-                    ))
+            # Find common dates
+            common_dates = dates1.intersection(dates2)
+            
+            # Only calculate correlation if we have enough common days
+            if len(common_dates) >= min_days:
+                # Extract aligned data
+                x = [data1[date] for date in common_dates]
+                y = [data2[date] for date in common_dates]
+                
+                # Calculate correlation
+                corr = calc_correlation(x, y)
+                
+                # Update top correlations
+                if np.isfinite(corr):  # Ensure correlation is valid
+                    if len(min_heap) < top_n:
+                        heapq.heappush(min_heap, (corr, company1, company2))
+                    elif corr > min_heap[0][0]:
+                        heapq.heappushpop(min_heap, (corr, company1, company2))
+            
+            pairs_processed += 1
     
-    # Convert to DataFrame
-    results = pd.DataFrame(correlated_pairs, 
-                          columns=['Company1_ID', 'Company2_ID', 
-                                  'Company1_Name', 'Company2_Name', 
-                                  'Correlation'])
-    
-    return results.sort_values(by='Correlation', key=abs, ascending=False)
-
-# Use the function
-results = find_correlated_companies(df, chunk_size=500, threshold=0.8)
-print(results.head(20))
+    # Sort results by correlation (descending)
+    results = sorted(min_heap, key=lambda x: x[0], reverse=True)
+    return results

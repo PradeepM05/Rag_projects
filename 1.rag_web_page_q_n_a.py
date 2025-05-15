@@ -1,64 +1,31 @@
-#pip install langchain langchain_community openai duckduckgo-search beautifulsoup4 langchain_openai 
+# Group by child and parent company IDs
+# First check which child companies have all 10 days of data
+child_counts = df.groupby('insm_issr_bb_co_id').size()
+valid_children = child_counts[child_counts == 10].index
 
-from langchain.prompts import ChatPromptTemplate
-from langchain.schema.output_parser import StrOutputParser
-from langchain.schema.runnable import RunnablePassthrough
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from bs4 import BeautifulSoup
-import requests
+# Filter dataframe to only include valid children
+filtered_df = df[df['insm_issr_bb_co_id'].isin(valid_children)]
 
+# Calculate correlations between child and parent scores
+correlations = []
 
+for (child_id, parent_id), group in filtered_df.groupby(['insm_issr_bb_co_id', 'parent_co_id']):
+    if len(group) == 10:  # Double-check we have 10 days of data for this pair
+        correlation = group['child_scr'].corr(group['parent_scr'])
+        child_name = group['insm_issr_bb_co_nm'].iloc[0]
+        parent_name = group['parent_co_nm'].iloc[0]
+        correlations.append({
+            'child_id': child_id,
+            'child_name': child_name,
+            'parent_id': parent_id,
+            'parent_name': parent_name,
+            'correlation': correlation
+        })
 
-import os
-os.environ['LANGCHAIN_TRACING_V2'] = 'true'
-os.environ['LANGCHAIN_ENDPOINT']  = 'https://api.smith.langchain.com'
-os.environ['LANGCHAIN_API_KEY']='lsv2_pt_xxxxxxxx'
-os.environ['OPEN_API_KEY']='sk-xxxxxxxxxxxx'
+# Create a dataframe of correlations and sort by absolute correlation (highest first)
+corr_df = pd.DataFrame(correlations)
+corr_df['abs_correlation'] = corr_df['correlation'].abs()
+result = corr_df.sort_values('abs_correlation', ascending=False)
 
-template = """ summarize the following question based on context:
-
-Context: {context}
-Question: {question}
-"""
-
-prompt = ChatPromptTemplate.from_template(template)
-
-# function to read from url page
-def scrape_text(url: str):
-  #send a GET request to webpage
-
-  try:
-    response = requests.get(url)
-
-    #Check if request was successful
-    if response.status_code == 200:
-      #parse the HTML content with BeatifulSoup
-      soup = BeautifulSoup(response.text, 'html.parser')
-
-      #Extract all the text from the webpage
-      page_text = soup.get_text(separator=" ", strip=True)
-
-      return page_text
-    else:
-      return f"Failed to retrieve web page: Status code {response.status_code}"
-
-  except Exception as e:
-    print(e)
-    return None
-
-
-
-url = 'https://blog.langchain.dev/announcing-langsmith/'
-
-page_content = scrape_text(url)[:10000]
-
-chain = prompt | ChatOpenAI(model='gpt-3.5-turbo-0125', temperature=0, openai_api_key = os.environ['OPEN_API_KEY'] ) | StrOutputParser()
-
-# Define the input data
-input_data = {
-    "question": "What is Langchain?",
-    "context": page_content
-}
-
-# Pass the required input argument
-chain.invoke(input_data)
+# Display top highly correlated pairs
+print(result[['child_name', 'parent_name', 'correlation', 'abs_correlation']].head(10))

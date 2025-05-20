@@ -1,114 +1,29 @@
-WITH 
--- Get base company data with current day scores
-BASE_DATA AS (
-    SELECT DISTINCT
-        T1.COB_DT,
-        T1.EOD_MKT_INSM_DIM_KY,
-        T1.INSM_PME_ID,
-        T1.INSM_ISSR_BB_CO_ID,
-        T1.INSM_ISSR_BB_CO_NM,
-        T2.ID_BB_PARENT_CO AS PARENT_CO_ID,
-        T2.LONG_PARENT_COMP_NAME AS PARENT_CO_NM,
-        -- child s-scores (current day)
-        T1.SGL_DY_PXCHG_SCR AS PXCHG_SCR,
-        T1.PX_CREEP_SCR AS CREEP_SCR,
-        T1.DVOL_SCR,
-        SYSDATE AS create_date
-    FROM CDM_ACTIMIZE.EQUITY_PRICING_SCR_HIST T1
-    LEFT JOIN CDN_STG.CREDITRISKV2_STG T2
-        ON T1.INSM_ISSR_BB_CO_ID = T2.ID_BB_COMPANY
-    WHERE T1.COB_DT = V_CURRENT_DATE 
-    AND COMPANY_IS_PRIVATE = 'N' 
-    AND ID_BB_PARENT_CO != ' '
-),
--- Get parent current day scores
-PARENT_CURRENT AS (
-    SELECT DISTINCT
-        PARENT_Z.INSM_ISSR_BB_CO_ID AS PARENT_ID,
-        PARENT_Z.SGL_DY_PXCHG_SCR AS PARENT_D0_PXCHG_SCR,
-        PARENT_Z.PX_CREEP_SCR AS PARENT_D0_CREEP_SCR,
-        PARENT_Z.DVOL_SCR AS PARENT_D0_DVOL_SCR
-    FROM CDM_ACTIMIZE.EQUITY_PRICING_SCR_HIST PARENT_Z
-    WHERE PARENT_Z.COB_DT = V_CURRENT_DATE
-    AND PARENT_Z.SGL_DY_PXCHG_SCR IS NOT NULL
-),
--- Calculate next business day
-NEXT_BIZ_DAY AS (
-    SELECT
-        CASE
-            WHEN TO_CHAR(V_CURRENT_DATE, 'DY', 'NLS_DATE_LANGUAGE=AMERICAN') = 'FRI' THEN V_CURRENT_DATE + 3
-            WHEN TO_CHAR(V_CURRENT_DATE, 'DY', 'NLS_DATE_LANGUAGE=AMERICAN') = 'SAT' THEN V_CURRENT_DATE + 4
-            ELSE V_CURRENT_DATE + 1
-        END AS NEXT_DAY
-    FROM DUAL
-),
--- Get parent next business day scores
-PARENT_NEXT_DAY AS (
-    SELECT DISTINCT
-        PARENT_Z_D1.INSM_ISSR_BB_CO_ID AS PARENT_ID,
-        PARENT_Z_D1.SGL_DY_PXCHG_SCR AS PARENT_DP1_PXCHG_SCR,
-        PARENT_Z_D1.PX_CREEP_SCR AS PARENT_DP1_CREEP_SCR,
-        PARENT_Z_D1.DVOL_SCR AS PARENT_DP1_DVOL_SCR,
-        PARENT_Z_D1.COB_DT AS COB_DT_D1
-    FROM CDM_ACTIMIZE.EQUITY_PRICING_SCR_HIST PARENT_Z_D1
-    JOIN NEXT_BIZ_DAY ON 1=1
-    WHERE PARENT_Z_D1.COB_DT = NEXT_BIZ_DAY.NEXT_DAY
-),
--- Calculate next-to-next business day
-NEXT_TO_NEXT_BIZ_DAY AS (
-    SELECT
-        CASE
-            WHEN TO_CHAR(NEXT_DAY, 'DY', 'NLS_DATE_LANGUAGE=AMERICAN') = 'THU' THEN NEXT_DAY + 4
-            WHEN TO_CHAR(NEXT_DAY, 'DY', 'NLS_DATE_LANGUAGE=AMERICAN') = 'FRI' THEN NEXT_DAY + 3
-            WHEN TO_CHAR(NEXT_DAY, 'DY', 'NLS_DATE_LANGUAGE=AMERICAN') = 'SAT' THEN NEXT_DAY + 2
-            ELSE NEXT_DAY + 1
-        END AS NEXT_TO_NEXT_DAY
-    FROM NEXT_BIZ_DAY
-),
--- Get parent next-to-next business day scores
-PARENT_NEXT_TO_NEXT_DAY AS (
-    SELECT DISTINCT
-        PARENT_Z_D2.INSM_ISSR_BB_CO_ID AS PARENT_ID,
-        PARENT_Z_D2.SGL_DY_PXCHG_SCR AS PARENT_DP2_PXCHG_SCR,
-        PARENT_Z_D2.PX_CREEP_SCR AS PARENT_DP2_CREEP_SCR,
-        PARENT_Z_D2.DVOL_SCR AS PARENT_DP2_DVOL_SCR,
-        PARENT_Z_D2.COB_DT AS COB_DT_D2
-    FROM CDM_ACTIMIZE.EQUITY_PRICING_SCR_HIST PARENT_Z_D2
-    JOIN NEXT_TO_NEXT_BIZ_DAY ON 1=1
-    WHERE PARENT_Z_D2.COB_DT = NEXT_TO_NEXT_BIZ_DAY.NEXT_TO_NEXT_DAY
-)
--- Final select joining all the data together
-SELECT
-    B.COB_DT,
-    B.EOD_MKT_INSM_DIM_KY,
-    B.INSM_PME_ID,
-    B.INSM_ISSR_BB_CO_ID,
-    B.INSM_ISSR_BB_CO_NM,
-    B.PARENT_CO_ID,
-    B.PARENT_CO_NM,
-    -- child s-scores (current day)
-    B.PXCHG_SCR,
-    B.CREEP_SCR,
-    B.DVOL_SCR,
-    -- parent s-scores (current day)
-    PC.PARENT_D0_PXCHG_SCR,
-    PC.PARENT_D0_CREEP_SCR,
-    PC.PARENT_D0_DVOL_SCR,
-    -- parent s-scores (next business day)
-    PND.PARENT_DP1_PXCHG_SCR,
-    PND.PARENT_DP1_CREEP_SCR,
-    PND.PARENT_DP1_DVOL_SCR,
-    PND.COB_DT_D1,
-    -- parent s-scores (next-to-next business day)
-    PNND.PARENT_DP2_PXCHG_SCR,
-    PNND.PARENT_DP2_CREEP_SCR,
-    PNND.PARENT_DP2_DVOL_SCR,
-    PNND.COB_DT_D2,
-    B.create_date
-FROM BASE_DATA B
-LEFT JOIN PARENT_CURRENT PC
-    ON B.PARENT_CO_ID = PC.PARENT_ID
-LEFT JOIN PARENT_NEXT_DAY PND
-    ON B.PARENT_CO_ID = PND.PARENT_ID
-LEFT JOIN PARENT_NEXT_TO_NEXT_DAY PNND
-    ON B.PARENT_CO_ID = PNND.PARENT_ID;
+# Assuming df_ibs and df_corr are already loaded
+# First, let's rename columns to make the joins clearer
+df_ibs_copy = df_ibs.rename(columns={'insm_issr_bb_co_id': 'company_id', 
+                                    'td_ins_pty_coper_id': 'coper_id'})
+
+# Merge child companies
+result = df_corr.merge(
+    df_ibs_copy,
+    left_on='child_co_id',
+    right_on='company_id',
+    how='left'
+).rename(columns={'coper_id': 'child_coper_id'})
+
+# Merge parent companies
+result = result.merge(
+    df_ibs_copy,
+    left_on='parent_co_id',
+    right_on='company_id',
+    how='left',
+    suffixes=('_child', '_parent')
+).rename(columns={'coper_id': 'parent_coper_id'})
+
+# Select relevant columns
+final_result = result[['child_co_id', 'child_co_name', 'child_coper_id', 
+                      'parent_co_id', 'parent_co_name', 'parent_coper_id', 
+                      'correlation', 'abs_correlation']]
+
+# Display the result
+print(final_result)

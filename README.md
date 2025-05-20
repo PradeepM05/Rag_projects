@@ -1,29 +1,24 @@
-# Assuming df_ibs and df_corr are already loaded
-# First, let's rename columns to make the joins clearer
-df_ibs_copy = df_ibs.rename(columns={'insm_issr_bb_co_id': 'company_id', 
-                                    'td_ins_pty_coper_id': 'coper_id'})
+-- First, add the new columns if they don't exist
+ALTER TABLE CDM_ACTIMIZE.EQ_PRICING_CREDIT_RISK_CORR 
+ADD (
+    PX_CHG_CORR NUMBER,
+    PX_CHG_CORR_COUNT NUMBER
+);
 
-# Merge child companies
-result = df_corr.merge(
-    df_ibs_copy,
-    left_on='child_co_id',
-    right_on='company_id',
-    how='left'
-).rename(columns={'coper_id': 'child_coper_id'})
-
-# Merge parent companies
-result = result.merge(
-    df_ibs_copy,
-    left_on='parent_co_id',
-    right_on='company_id',
-    how='left',
-    suffixes=('_child', '_parent')
-).rename(columns={'coper_id': 'parent_coper_id'})
-
-# Select relevant columns
-final_result = result[['child_co_id', 'child_co_name', 'child_coper_id', 
-                      'parent_co_id', 'parent_co_name', 'parent_coper_id', 
-                      'correlation', 'abs_correlation']]
-
-# Display the result
-print(final_result)
+-- Single query to update both columns
+MERGE INTO CDM_ACTIMIZE.EQ_PRICING_CREDIT_RISK_CORR t1
+USING (
+    SELECT 
+        CHILD_CO_ID,
+        PARENT_CO_ID,
+        CORR(PXCHG_SCR, PARENT_D0_PXCHG_SCR) AS correlation,
+        COUNT(*) AS data_count
+    FROM CDM_ACTIMIZE.EQ_PRICING_CREDIT_RISK_CORR
+    WHERE PXCHG_SCR IS NOT NULL
+    AND PARENT_D0_PXCHG_SCR IS NOT NULL
+    GROUP BY CHILD_CO_ID, PARENT_CO_ID
+) t2
+ON (t1.CHILD_CO_ID = t2.CHILD_CO_ID AND t1.PARENT_CO_ID = t2.PARENT_CO_ID)
+WHEN MATCHED THEN UPDATE SET
+    t1.PX_CHG_CORR = t2.correlation,
+    t1.PX_CHG_CORR_COUNT = t2.data_count;

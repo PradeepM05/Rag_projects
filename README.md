@@ -4,7 +4,7 @@ ADD (
     PX_CHG_CORR NUMBER,
     PX_CHG_CORR_COUNT NUMBER
 );
-
+https://claude.ai/public/artifacts/164dde5c-3d58-4555-bf4f-c16143fb6dd9
 -- Single query to update both columns
 MERGE INTO CDM_ACTIMIZE.EQ_PRICING_CREDIT_RISK_CORR t1
 USING (
